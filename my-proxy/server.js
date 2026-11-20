@@ -42,4 +42,71 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
     
     // Ensure protocol
     if (!targetUrl.startsWith('http')) {
-        targetUrl = 'https://'
+        targetUrl = 'https://' + targetUrl;
+    }
+
+    try {
+        // Fetch the original page
+        const html = await axios.get(targetUrl);
+        let content = html.data;
+
+        // Use Cheerio to parse and rewrite links
+        const $ = cheerio.load(content);
+
+        // Rewrite all relative links to point back to this proxy
+        $('a[href]').each((i, elem) => {
+            let href = $(elem).attr('href');
+            if (!href.startsWith('http')) {
+                // If it's a relative link, resolve it against the base URL
+                href = new URL(href, targetUrl).href;
+            }
+            // Rewrite to point to our proxy
+            $(elem).attr('href', `/proxy/${encodePath(href)}`);
+        });
+
+        // Rewrite images
+        $('img[src]').each((i, elem) => {
+            let src = $(elem).attr('src');
+            if (!src.startsWith('http')) {
+                src = new URL(src, targetUrl).href;
+            }
+            $(elem).attr('src', `/proxy/${encodePath(src)}`);
+        });
+
+        // Rewrite scripts and stylesheets similarly
+        $('script[src]').each((i, elem) => {
+            let src = $(elem).attr('src');
+            if (!src.startsWith('http')) src = new URL(src, targetUrl).href;
+            $(elem).attr('src', `/proxy/${encodePath(src)}`);
+        });
+
+        $('link[rel="stylesheet"]').each((i, elem) => {
+            let href = $(elem).attr('href');
+            if (!href.startsWith('http')) href = new URL(href, targetUrl).href;
+            $(elem).attr('href', `/proxy/${encodePath(href)}`);
+        });
+
+        res.send(content);
+    } catch (error) {
+        res.status(500).send(`Error fetching ${targetUrl}: ${error.message}`);
+    }
+});
+
+// Handle the actual content retrieval for rewritten links
+app.get('/content/:encodedUrl', async (req, res) => {
+    const targetUrl = decodePath(req.params.encodedUrl);
+    try {
+        const response = await axios.get(targetUrl, { responseType: 'arraybuffer' });
+        res.set({
+            'Content-Type': response.headers['content-type'] || 'application/octet-stream',
+            'Cache-Control': 'public, max-age=3600'
+        });
+        res.send(response.data);
+    } catch (error) {
+        res.status(500).send('Failed to fetch resource');
+    }
+});
+
+app.listen(PORT, () => {
+    console.log(`Proxy running at http://localhost:${PORT}`);
+});
